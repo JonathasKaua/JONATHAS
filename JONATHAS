@@ -1,0 +1,292 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "authorship_tag": "ABX9TyNCeQ28ghj5Rd7FG5KYTW8d",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/JonathasKaua/JONATHAS/blob/main/JONATHAS\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 39,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "iXwhBRq1Vejc",
+        "outputId": "60060875-7d5a-48d0-80b8-d6aeb9829726"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Requirement already satisfied: passlib in /usr/local/lib/python3.10/dist-packages (1.7.4)\n"
+          ]
+        }
+      ],
+      "source": [
+        "import numpy as np\n",
+        "import pandas as pd\n",
+        "\n",
+        "import os\n",
+        "import json\n",
+        "\n",
+        "import sqlite3\n",
+        "import tensorflow as tf\n",
+        "\n",
+        "from transformers import AutoTokenizer, AutoModelForCausalLM\n",
+        "from flask import Flask, request, jsonify, render_template\n",
+        "\n",
+        "!pip install passlib\n",
+        "from passlib.hash import bcrypt\n",
+        "\n",
+        "from tensorflow.keras.models import load_model\n",
+        "\n",
+        "from gensim.models import Word2Vec\n",
+        "from tensorflow.keras.preprocessing.text import Tokenizer\n",
+        "from tensorflow.keras.preprocessing.sequence import pad_sequences\n",
+        "from tensorflow.keras.models import load_model"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install validators\n",
+        "!pip install email_validator\n",
+        "!pip install gensim\n",
+        "!pip install -q google-generativeai\n",
+        "!pip install -q -U google-generativeai"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "QY603kT_qVFd",
+        "outputId": "bdf10230-7981-40b8-8683-db5681af30e7"
+      },
+      "execution_count": 46,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Requirement already satisfied: validators in /usr/local/lib/python3.10/dist-packages (0.28.1)\n",
+            "Requirement already satisfied: email_validator in /usr/local/lib/python3.10/dist-packages (2.1.1)\n",
+            "Requirement already satisfied: dnspython>=2.0.0 in /usr/local/lib/python3.10/dist-packages (from email_validator) (2.6.1)\n",
+            "Requirement already satisfied: idna>=2.0.0 in /usr/local/lib/python3.10/dist-packages (from email_validator) (3.7)\n",
+            "Requirement already satisfied: gensim in /usr/local/lib/python3.10/dist-packages (4.3.2)\n",
+            "Requirement already satisfied: numpy>=1.18.5 in /usr/local/lib/python3.10/dist-packages (from gensim) (1.25.2)\n",
+            "Requirement already satisfied: scipy>=1.7.0 in /usr/local/lib/python3.10/dist-packages (from gensim) (1.11.4)\n",
+            "Requirement already satisfied: smart-open>=1.8.1 in /usr/local/lib/python3.10/dist-packages (from gensim) (6.4.0)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from email_validator import validate_email\n",
+        "\n",
+        "import markdown\n",
+        "\n",
+        "import google.generativeai as genai\n",
+        "GOOGLE_API_KEY=\"AIzaSyCrI6SNygW6A8j9ko8dKZGygiMjglsfBog\"\n",
+        "genai.configure(api_key=GOOGLE_API_KEY)\n"
+      ],
+      "metadata": {
+        "id": "nWaDrIK7tAr8"
+      },
+      "execution_count": 48,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Carrega as configurações de segurança\n",
+        "with open('safety_settings.json', 'r') as f:\n",
+        "    safety_settings = json.load(f)\n",
+        "\n",
+        "# Carrega os embeddings GloVe\n",
+        "embeddings = gensim.models.KeyedVectors.load_word2vec_format('glove.6B.100d.txt', binary=False)\n",
+        "\n",
+        "# Cria um banco de dados para armazenar as informações pessoais do usuário\n",
+        "conn = sqlite3.connect('db.sqlite')\n",
+        "c = conn.cursor()\n",
+        "c.execute('''CREATE TABLE IF NOT EXISTS users (\n",
+        "    id INTEGER PRIMARY KEY,\n",
+        "    nome TEXT,\n",
+        "    idade INTEGER,\n",
+        "    idioma TEXT,\n",
+        "    genero TEXT,\n",
+        "    sexualidade TEXT,\n",
+        "    pessoas_morando_junto INTEGER,\n",
+        "    filhos INTEGER,\n",
+        "    relacionamento_serio TEXT,\n",
+        "    faixa_salarial TEXT,\n",
+        "    cidade TEXT,\n",
+        "    senha TEXT\n",
+        ")''')\n",
+        "conn.commit()\n",
+        "\n",
+        "# Cria um aplicativo Flask para gerenciar a interface do usuário e a autenticação\n",
+        "app = Flask(__name__)\n",
+        "\n",
+        "# Dicionário para armazenar as sessões dos usuários\n",
+        "sessions = {}\n",
+        "\n",
+        "# Rota para criar um novo usuário\n",
+        "@app.route('/users', methods=['POST'])\n",
+        "def create_user():\n",
+        "    data = request.get_json()\n",
+        "    if not validate_email(data['email']):\n",
+        "        return jsonify({'status': 'error', 'message': 'Endereço de e-mail inválido'})\n",
+        "    if not validate_電話番号(data['電話番号']):\n",
+        "        return jsonify({'status': 'error', 'message': 'Número de telefone inválido'})\n",
+        "    hashed_password = bcrypt.hash(data['senha'])\n",
+        "    c.execute('''INSERT INTO users (nome, idade, idioma, genero, sexualidade, pessoas_morando_junto, filhos, relacionamento_serio, faixa_salarial, cidade, senha) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',\n",
+        "              (data['nome'], data['idade'], data['idioma'], data['genero'], data['sexualidade'], data['pessoas_morando_junto'], data['filhos'], data['relacionamento_serio'], data['faixa_salarial'], data['cidade'], hashed_password))\n",
+        "    conn.commit()\n",
+        "    return jsonify({'status': 'ok'})\n",
+        "\n",
+        "# Rota para autenticar um usuário\n",
+        "@app.route('/users/auth', methods=['POST'])\n",
+        "def auth_user():\n",
+        "    data = request.get_json()\n",
+        "    c.execute('''SELECT * FROM users WHERE email = ?''', (data['email'],))\n",
+        "    user = c.fetchone()\n",
+        "    if user is not None and bcrypt.verify(data['senha'], user['senha']):\n",
+        "        # Cria uma nova sessão para o usuário\n",
+        "        session_id = os.urandom(32).hex()\n",
+        "        sessions[session_id] = user\n",
+        "        return jsonify({'status': 'ok', 'session_id': session_id})\n",
+        "    else:\n",
+        "        return jsonify({'status': 'error', 'message': 'Usuário não encontrado ou senha incorreta'})\n",
+        "\n",
+        "# Rota para obter as informações pessoais de um usuário\n",
+        "@app.route('/users/info', methods=['GET'])\n",
+        "def get_user_info():\n",
+        "    session_id = request.headers.get('Authorization')\n",
+        "    if session_id in sessions:\n",
+        "        user = sessions[session_id]\n",
+        "        return jsonify({'status': 'ok', 'user': user})\n",
+        "    else:\n",
+        "        return jsonify({'status': 'error', 'message': 'Sessão inválida'})\n",
+        "\n",
+        "# Rota para gerar uma resposta\n",
+        "@app.route('/generate', methods=['POST'])\n",
+        "def generate_response():\n",
+        "    session_id = request.headers.get('Authorization')\n",
+        "    if session_id in sessions:\n",
+        "        user = sessions[session_id]\n",
+        "        prompt = request.get_json()['prompt']\n",
+        "        # Adiciona as informações pessoais do usuário ao prompt\n",
+        "        prompt = f\"{prompt}. Sou {user['nome']}, tenho {user['idade']} anos e moro em {user['cidade']}. \"\n",
+        "        # Embuti o prompt\n",
+        "        embeddings = embeddings(prompt)\n",
+        "        # Concatena os embeddings com os embeddings do usuário\n",
+        "        user_embeddings = tf.keras.layers.Embedding(1, 100)(tf.constant([[user['idade']]]))\n",
+        "        embeddings = tf.concat([embeddings, user_embeddings], axis=1)\n",
+        "        # Gera a resposta\n",
+        "        response = generate_response(embeddings, user, model, tokenizer, 0.6, safety_settings)\n",
+        "        # Formata a resposta usando Markdown\n",
+        "        response = markdown.markdown(response)\n",
+        "        return jsonify({'status': 'ok', 'response': response})\n",
+        "    else:\n",
+        "        return jsonify({'status': 'error', 'message': 'Sessão inválida'})\n",
+        "\n",
+        "# Código adicional para recursos criativos e interface de usuário\n",
+        "\n",
+        "# Carrega o modelo de personalidade\n",
+        "personality_model = load_model('personality_model.h5')\n",
+        "\n",
+        "# Carrega o sistema de gamificação\n",
+        "gamification_system = GamificationSystem()\n",
+        "\n",
+        "# Cria uma interface de usuário da web\n",
+        "@app.route('/')\n",
+        "def index():\n",
+        "    return render_template('index.html')\n",
+        "\n",
+        "# Rota para gerar uma resposta\n",
+        "@app.route('/generate', methods=['POST'])\n",
+        "def generate_response():\n",
+        "    # Obtém a entrada do usuário\n",
+        "    prompt = request.form['prompt']\n",
+        "\n",
+        "    # Adiciona as informações pessoais do usuário ao prompt\n",
+        "    user = get_user_info()\n",
+        "    prompt = f\"{prompt}. Sou {user['nome']}, tenho {user['idade']} anos e moro em {user['cidade']}. \"\n",
+        "\n",
+        "    # Embuti o prompt\n",
+        "    embeddings = embeddings(prompt)\n",
+        "\n",
+        "    # Concatena os embeddings com os embeddings do usuário\n",
+        "    user_embeddings = tf.keras.layers.Embedding(1, 100)(tf.constant([[user['idade']]]))\n",
+        "    embeddings = tf.concat([embeddings, user_embeddings], axis=1)\n",
+        "\n",
+        "    # Gera a resposta\n",
+        "    response = generate_response(embeddings, user, model, tokenizer, 0.6, safety_settings)\n",
+        "\n",
+        "    # Formata a resposta usando Markdown\n",
+        "    response = markdown.markdown(response)\n",
+        "\n",
+        "    # Aplica a personalidade à resposta\n",
+        "    response = personality_model.predict(response)\n",
+        "\n",
+        "    # Aplica o sistema de gamificação à resposta\n",
+        "    gamification_system.update_user_score(user, response)\n",
+        "\n",
+        "    # Retorna a resposta\n",
+        "    return jsonify({'status': 'ok', 'response': response})\n",
+        "\n",
+        "# Código adicional para a interface de usuário\n",
+        "\n",
+        "if __name__ == '__main__':\n",
+        "    app.run()"
+      ],
+      "metadata": {
+        "id": "OOPzfrvjaBSO",
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 211
+        },
+        "outputId": "ba8519d4-1a3e-41b8-9b50-e49b1e1dc183"
+      },
+      "execution_count": 50,
+      "outputs": [
+        {
+          "output_type": "error",
+          "ename": "FileNotFoundError",
+          "evalue": "[Errno 2] No such file or directory: 'safety_settings.json'",
+          "traceback": [
+            "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+            "\u001b[0;31mFileNotFoundError\u001b[0m                         Traceback (most recent call last)",
+            "\u001b[0;32m<ipython-input-50-08bd362e5df3>\u001b[0m in \u001b[0;36m<cell line: 2>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[0;31m# Carrega as configurações de segurança\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 2\u001b[0;31m \u001b[0;32mwith\u001b[0m \u001b[0mopen\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m'safety_settings.json'\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m'r'\u001b[0m\u001b[0;34m)\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mf\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      3\u001b[0m     \u001b[0msafety_settings\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mjson\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mload\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mf\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      4\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      5\u001b[0m \u001b[0;31m# Carrega os embeddings GloVe\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;31mFileNotFoundError\u001b[0m: [Errno 2] No such file or directory: 'safety_settings.json'"
+          ]
+        }
+      ]
+    }
+  ]
+}
